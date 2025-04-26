@@ -3,7 +3,13 @@ import SwiftUI
 
 struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> WeatherEntry {
-        WeatherEntry(date: Date(), temperature: 0, windSpeed: 0, precipitation: 0, uvIndex: 0, cityName: "Oslo")
+        WeatherEntry(
+            date: Date(),
+            cityName: "Oslo",
+            temperature: 0,
+            conditionSymbol: "sun.max",
+            hourlyForecast: []
+        )
     }
 
     func getSnapshot(in context: Context, completion: @escaping (WeatherEntry) -> ()) {
@@ -11,14 +17,26 @@ struct Provider: TimelineProvider {
             if let entry = entry {
                 completion(entry)
             } else {
-                completion(WeatherEntry(date: Date(), temperature: 0, windSpeed: 0, precipitation: 0, uvIndex: 0, cityName: "Oslo"))
+                completion(WeatherEntry(
+                    date: Date(),
+                    cityName: "Oslo",
+                    temperature: 0,
+                    conditionSymbol: "sun.max",
+                    hourlyForecast: []
+                ))
             }
         }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<WeatherEntry>) -> ()) {
         fetchWeather { entry in
-            let timelineEntry = entry ?? WeatherEntry(date: Date(), temperature: 0, windSpeed: 0, precipitation: 0, uvIndex: 0, cityName: "Oslo")
+            let timelineEntry = entry ?? WeatherEntry(
+                date: Date(),
+                cityName: "Oslo",
+                temperature: 0,
+                conditionSymbol: "sun.max",
+                hourlyForecast: []
+            )
             let timeline = Timeline(entries: [timelineEntry], policy: .after(Date().addingTimeInterval(60 * 60)))
             completion(timeline)
         }
@@ -30,8 +48,6 @@ struct Provider: TimelineProvider {
         let lon = defaults?.double(forKey: "selected_lon") ?? 10.75
         let city = defaults?.string(forKey: "selected_city") ?? "Oslo"
 
-        print("🌍 Widget loading weather for: \(city) at lat: \(lat), lon: \(lon)")
-
         guard let url = URL(string: "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=\(lat)&lon=\(lon)") else {
             completion(nil)
             return
@@ -42,32 +58,47 @@ struct Provider: TimelineProvider {
 
         let task = URLSession.shared.dataTask(with: request) { data, _, error in
             guard let data = data, error == nil else {
-                print("❌ Network error: \(error?.localizedDescription ?? "Unknown error")")
                 completion(nil)
                 return
             }
             do {
                 let met = try JSONDecoder().decode(MetResponse.self, from: data)
-                if let details = met.properties.timeseries.first?.data.instant.details {
-                    let entry = WeatherEntry(
-                        date: Date(),
-                        temperature: details.air_temperature ?? 0,
-                        windSpeed: details.wind_speed ?? 0,
-                        precipitation: details.precipitation_amount ?? 0,
-                        uvIndex: details.ultraviolet_index_clear_sky ?? 0,
-                        cityName: city
-                    )
-                    print("✅ Widget entry created: \(entry)")
-                    completion(entry)
-                } else {
-                    print("❌ Missing details in API response")
+
+                // Current Weather
+                guard let firstTimeserie = met.properties.timeseries.first else {
                     completion(nil)
+                    return
                 }
+                let current = firstTimeserie.data.instant.details
+
+                // First 5 hours forecast
+                let now = Date()
+                let formatter = DateFormatter()
+                formatter.dateFormat = "ha" // Example: 4PM, 5PM, etc.
+
+                let firstFiveHours = met.properties.timeseries.prefix(5)
+                let hourlyForecast = firstFiveHours.compactMap { timeserie -> HourlyForecast? in
+                    guard let date = ISO8601DateFormatter().date(from: timeserie.time) else { return nil }
+                    let details = timeserie.data.instant.details
+                    return HourlyForecast(
+                        hour: formatter.string(from: date),
+                        symbol: "cloud.sun", // 🌟 Improve soon
+                        temperature: Int(details.air_temperature ?? 0)
+                    )
+                }
+
+                let entry = WeatherEntry(
+                    date: now,
+                    cityName: city,
+                    temperature: current.air_temperature ?? 0,
+                    conditionSymbol: "sun.max", // 🌟 Improve soon
+                    hourlyForecast: hourlyForecast
+                )
+
+                completion(entry)
+
             } catch {
-                print("❌ Widget decoding failed: \(error)")
-                if let json = String(data: data, encoding: .utf8) {
-                    print("📦 Raw API response: \(json.prefix(300))...")
-                }
+                print("❌ Decoding error: \(error.localizedDescription)")
                 completion(nil)
             }
         }
